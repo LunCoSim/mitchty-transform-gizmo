@@ -424,16 +424,14 @@ fn update_gizmos(
         return;
     };
 
-    // scale up the cursor pos from the custom viewport rect, if provided
-    if let Some(custom_viewport) = gizmo_options.viewport_rect {
-        let vp_ratio = viewport.size() / custom_viewport.size();
-        let mut scaled_cursor_pos = (cursor_pos - (custom_viewport.min - viewport.min)) * vp_ratio;
-        if !viewport.contains(scaled_cursor_pos) {
-            scaled_cursor_pos = *last_scaled_cursor_pos;
-        }
+    if let Some(scaled_cursor_pos) =
+        map_cursor_to_gizmo_viewport(cursor_pos, viewport, gizmo_options.viewport_rect)
+    {
         *last_scaled_cursor_pos = scaled_cursor_pos;
         cursor_pos = scaled_cursor_pos;
-    };
+    } else if gizmo_options.viewport_rect.is_some() {
+        cursor_pos = *last_scaled_cursor_pos;
+    }
 
     let viewport = Rect::from_min_max(
         Pos2::new(viewport.min.x, viewport.min.y),
@@ -583,6 +581,71 @@ fn update_gizmos(
     }
 
     gizmo_storage.target_entities = target_entities;
+}
+
+/// Map a window-space cursor into the active camera's logical viewport.
+///
+/// `GizmoOptions::viewport_rect` describes where an offscreen camera is
+/// presented in the window. Both rendering and picking must use this same
+/// mapping so a handle's visual position is also its interactive position.
+pub(crate) fn map_cursor_to_gizmo_viewport(
+    cursor_pos: Vec2,
+    viewport: bevy_math::Rect,
+    custom_viewport: Option<bevy_math::Rect>,
+) -> Option<Vec2> {
+    let Some(custom_viewport) = custom_viewport else {
+        return Some(cursor_pos);
+    };
+    let size = custom_viewport.size();
+    if !size.is_finite() || size.x <= 0.0 || size.y <= 0.0 || !custom_viewport.contains(cursor_pos)
+    {
+        return None;
+    }
+    let viewport_size = viewport.size();
+    if !viewport_size.is_finite() || viewport_size.x <= 0.0 || viewport_size.y <= 0.0 {
+        return None;
+    }
+    let mapped = (cursor_pos - (custom_viewport.min - viewport.min)) * (viewport_size / size);
+    viewport.contains(mapped).then_some(mapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_cursor_to_gizmo_viewport;
+    use bevy_math::{Rect, Vec2};
+
+    #[test]
+    fn maps_window_cursor_to_custom_viewport() {
+        let camera = Rect::from_corners(Vec2::ZERO, Vec2::new(800.0, 600.0));
+        let panel = Rect::from_corners(Vec2::new(100.0, 50.0), Vec2::new(500.0, 350.0));
+
+        assert_eq!(
+            map_cursor_to_gizmo_viewport(Vec2::new(300.0, 200.0), camera, Some(panel)),
+            Some(Vec2::new(400.0, 300.0))
+        );
+    }
+
+    #[test]
+    fn rejects_cursor_outside_custom_viewport() {
+        let camera = Rect::from_corners(Vec2::ZERO, Vec2::new(800.0, 600.0));
+        let panel = Rect::from_corners(Vec2::new(100.0, 50.0), Vec2::new(500.0, 350.0));
+
+        assert_eq!(
+            map_cursor_to_gizmo_viewport(Vec2::new(50.0, 200.0), camera, Some(panel)),
+            None
+        );
+    }
+
+    #[test]
+    fn leaves_full_window_cursor_unchanged() {
+        let camera = Rect::from_corners(Vec2::ZERO, Vec2::new(800.0, 600.0));
+        let cursor = Vec2::new(320.0, 240.0);
+
+        assert_eq!(
+            map_cursor_to_gizmo_viewport(cursor, camera, None),
+            Some(cursor)
+        );
+    }
 }
 
 fn draw_gizmos(
