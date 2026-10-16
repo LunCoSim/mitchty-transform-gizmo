@@ -34,10 +34,14 @@ use bevy_camera::Camera;
 use bevy_ecs::prelude::*;
 use bevy_input::prelude::*;
 use bevy_math::{DQuat, DVec3, Vec2};
-use bevy_picking::hover::HoverMap;
+use bevy_picking::{
+    hover::HoverMap,
+    pointer::{PointerId, PointerLocation},
+};
 use bevy_platform::collections::HashMap;
 use bevy_transform::prelude::*;
 use bevy_window::{PrimaryWindow, Window};
+#[cfg(feature = "mouse_interaction")]
 use mouse_interact::MouseGizmoInteractionPlugin;
 use picking::TransformGizmoPickingPlugin;
 use uuid::Uuid;
@@ -378,24 +382,36 @@ pub struct GizmoDragging;
 
 #[allow(clippy::too_many_arguments)]
 fn update_gizmos(
-    q_window: Query<&Window, With<PrimaryWindow>>,
+    q_window: Query<(Entity, &Window), With<PrimaryWindow>>,
+    pointers: Query<(&PointerId, &PointerLocation)>,
     q_gizmo_camera: Query<(&Camera, &GlobalTransform), With<GizmoCamera>>,
     mut q_targets: Query<(Entity, &mut Transform, &mut GizmoTarget), Without<GizmoCamera>>,
     mut drag_started: MessageReader<GizmoDragStarted>,
     mut dragging: MessageReader<GizmoDragging>,
     gizmo_options: Res<GizmoOptions>,
     mut gizmo_storage: ResMut<GizmoStorage>,
-    mut last_cursor_pos: Local<Vec2>,
     mut last_scaled_cursor_pos: Local<Vec2>,
     #[cfg(feature = "gizmo_picking_backend")] hover_map: Res<HoverMap>,
 ) {
-    let Ok(window) = q_window.single() else {
+    let Ok((window_entity, window)) = q_window.single() else {
         // No primary window found.
         return;
     };
 
-    let mut cursor_pos = window.cursor_position().unwrap_or_else(|| *last_cursor_pos);
-    *last_cursor_pos = cursor_pos;
+    let Some(target) = bevy_camera::RenderTarget::Window(bevy_window::WindowRef::Primary)
+        .normalize(Some(window_entity))
+    else {
+        return;
+    };
+    let Some(mut cursor_pos) = pointers.iter().find_map(|(id, pointer)| {
+        if *id != PointerId::Mouse {
+            return None;
+        }
+        let location = pointer.location.as_ref()?;
+        (location.target == target).then_some(location.position)
+    }) else {
+        return;
+    };
 
     let scale_factor = window.scale_factor();
 
