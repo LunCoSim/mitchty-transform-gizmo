@@ -35,6 +35,7 @@ bevy_utils.workspace = true
 bevy_platform.workspace = true
 bevy_pbr.workspace = true
 bevy_ecs.workspace = true
+bevy_extract.workspace = true
 bevy_log.workspace = true
 bevy_window.workspace = true
 bevy_transform.workspace = true
@@ -42,9 +43,6 @@ bevy_derive.workspace = true
 bevy_image.workspace = true
 bytemuck.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-bevy = {workspace = true}
 
 [lints]
 workspace = true

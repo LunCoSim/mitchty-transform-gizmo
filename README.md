@@ -11,6 +11,8 @@
 
 ![All modes](media/all_modes.png)
 
+This LunCoSim branch targets Bevy 0.20 and egui 0.36. It preserves viewport-aware input, DPI handling, and depth-aware picking.
+
 ## Usage
 
 ### Bevy

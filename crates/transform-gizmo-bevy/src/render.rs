@@ -11,11 +11,16 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::query::ROQueryItem;
 use bevy_ecs::system::SystemParamItem;
 use bevy_ecs::system::lifetimeless::{Read, SRes};
+use bevy_extract::extract_component::ExtractComponent;
+use bevy_extract::sync_world::TemporaryEntity;
 use bevy_mesh::{PrimitiveTopology, VertexBufferLayout};
-use bevy_pbr::{MeshPipeline, MeshPipelineKey, MeshPipelineSystems, SetMeshViewBindGroup, tonemapping_pipeline_key};
+use bevy_pbr::{
+    MeshPipeline, MeshPipelineKey, MeshPipelineSystems, SetMeshViewBindGroup,
+    tonemapping_pipeline_key,
+};
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_reflect::{Reflect, TypePath};
-use bevy_render::extract_component::ExtractComponent;
+use bevy_render::camera::ExtractedCamera;
 use bevy_render::prelude::*;
 use bevy_render::render_asset::{
     PrepareAssetError, RenderAsset, RenderAssetPlugin, RenderAssets, prepare_assets,
@@ -28,12 +33,10 @@ use bevy_render::render_resource::{
     BlendState, Buffer, BufferInitDescriptor, BufferUsages, ColorTargetState, ColorWrites,
     CompareFunction, DepthBiasState, DepthStencilState, FragmentState, IndexFormat,
     MultisampleState, PipelineCache, PrimitiveState, RenderPipelineDescriptor,
-    SpecializedRenderPipeline, SpecializedRenderPipelines, StencilState,
-    VertexAttribute, VertexFormat, VertexState, VertexStepMode,
+    SpecializedRenderPipeline, SpecializedRenderPipelines, StencilState, VertexAttribute,
+    VertexFormat, VertexState, VertexStepMode,
 };
 use bevy_render::renderer::RenderDevice;
-use bevy_render::sync_world::TemporaryRenderEntity;
-use bevy_render::camera::ExtractedCamera;
 use bevy_render::view::ExtractedView;
 use bevy_render::{Extract, Render, RenderApp, RenderStartup, RenderSystems};
 use bevy_shader::Shader;
@@ -95,6 +98,7 @@ pub(crate) struct DrawDataHandles {
     Hash,
 )]
 #[reflect(Component)]
+#[extract_app(RenderApp)]
 pub(crate) struct GizmoDrawDataHandle(pub(crate) Handle<GizmoDrawData>);
 
 impl From<Handle<GizmoDrawData>> for GizmoDrawDataHandle {
@@ -118,7 +122,7 @@ fn extract_gizmo_data(mut commands: Commands, handles: Extract<Res<DrawDataHandl
     let handle_refs = handles.handles.values().cloned().collect::<HashSet<_>>();
 
     for handle in handle_refs {
-        commands.spawn((handle, TemporaryRenderEntity));
+        commands.spawn((handle, TemporaryEntity::<RenderApp>::default()));
     }
 }
 
@@ -256,6 +260,7 @@ impl SpecializedRenderPipeline for TransformGizmoPipeline {
             zero_initialize_workgroup_memory: true, // ?
             immediate_size: 0,
             vertex: VertexState {
+                constants: Default::default(),
                 shader: GIZMO_SHADER_HANDLE,
                 entry_point: Some("vertex".into()),
                 shader_defs: shader_defs.clone(),
@@ -281,6 +286,7 @@ impl SpecializedRenderPipeline for TransformGizmoPipeline {
                 ],
             },
             fragment: Some(FragmentState {
+                constants: Default::default(),
                 shader: GIZMO_SHADER_HANDLE,
                 shader_defs,
                 entry_point: Some("fragment".into()),
