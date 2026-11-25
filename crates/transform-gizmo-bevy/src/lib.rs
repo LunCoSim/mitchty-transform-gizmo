@@ -81,7 +81,7 @@ impl Plugin for TransformGizmoPlugin {
             .add_plugins(TransformGizmoRenderPlugin)
             .add_systems(
                 Last,
-                (handle_hotkeys, update_gizmos, draw_gizmos, cleanup_old_data).chain(),
+                (handle_hotkeys, update_gizmos, cleanup_old_data, draw_gizmos).chain(),
             );
 
         #[cfg(feature = "gizmo_picking_backend")]
@@ -243,6 +243,50 @@ struct GizmoStorage {
     target_entities: Vec<Entity>,
     entity_gizmo_map: HashMap<Entity, Uuid>,
     gizmos: HashMap<Uuid, Gizmo>,
+    draw_inputs: HashMap<Uuid, DrawInputs>,
+}
+
+struct DrawInputs {
+    config: GizmoConfig,
+    interaction: GizmoInteraction,
+    targets: Vec<Transform>,
+    dirty: bool,
+}
+
+impl GizmoStorage {
+    fn record_draw_inputs(
+        &mut self,
+        uuid: Uuid,
+        config: GizmoConfig,
+        interaction: GizmoInteraction,
+        targets: &[Transform],
+        interacted: bool,
+    ) {
+        // Focus, camera, options, viewport and every target are exact inputs.
+        // An in-progress drag can evolve internal gizmo state despite unchanged
+        // external inputs, so it is never served from the cached draw geometry.
+        let dirty = interacted
+            || interaction.drag_started
+            || interaction.dragging
+            || self.draw_inputs.get(&uuid).is_none_or(|previous| {
+                previous.config != config
+                    || previous.interaction != interaction
+                    || previous.targets != targets
+            });
+        if dirty {
+            self.draw_inputs.insert(
+                uuid,
+                DrawInputs {
+                    config,
+                    interaction,
+                    targets: targets.to_vec(),
+                    dirty,
+                },
+            );
+        } else if let Some(previous) = self.draw_inputs.get_mut(&uuid) {
+            previous.dirty = false;
+        }
+    }
 }
 
 fn handle_hotkeys(
@@ -555,10 +599,20 @@ fn update_gizmos(
             target_transform.scale = DVec3::from(result_transform.scale).as_vec3();
         }
 
+        let interacted = gizmo_result.is_some();
         gizmo_target.latest_result = gizmo_result.map(|(result, _)| result);
+        gizmo_storage.record_draw_inputs(
+            gizmo_uuid,
+            gizmo_config,
+            gizmo_interaction,
+            core::slice::from_ref(target_transforms.last().expect("current target captured")),
+            interacted,
+        );
     }
 
-    if gizmo_options.group_targets {
+    // Do not instantiate an empty group at the origin. Its draw asset would
+    // be generated and immediately retired on every frame without selection.
+    if gizmo_options.group_targets && !target_transforms.is_empty() {
         let gizmo = gizmo_storage.gizmos.entry(GIZMO_GROUP_UUID).or_default();
         gizmo.update_config(gizmo_config);
 
@@ -594,6 +648,13 @@ fn update_gizmos(
 
             gizmo_target.latest_result = gizmo_result.as_ref().map(|(result, _)| *result);
         }
+        gizmo_storage.record_draw_inputs(
+            GIZMO_GROUP_UUID,
+            gizmo_config,
+            gizmo_interaction,
+            &target_transforms,
+            gizmo_result.is_some(),
+        );
     }
 
     gizmo_storage.target_entities = target_entities;
@@ -670,6 +731,15 @@ fn draw_gizmos(
     mut draw_data_handles: ResMut<DrawDataHandles>,
 ) {
     for (gizmo_uuid, gizmo) in &gizmo_storage.gizmos {
+        let existing = draw_data_handles.handles.get(gizmo_uuid);
+        if gizmo_storage
+            .draw_inputs
+            .get(gizmo_uuid)
+            .is_some_and(|input| !input.dirty)
+            && existing.is_some_and(|handle| draw_data_assets.contains(handle.id()))
+        {
+            continue;
+        }
         let draw_data = gizmo.draw();
 
         let mut bevy_draw_data = render::GizmoDrawData::default();
@@ -678,20 +748,21 @@ fn draw_gizmos(
 
         let write_draw_data = |asset: &mut render::GizmoDrawData| {
             asset.0.vertices.clear();
-            asset.0.vertices.extend(draw_data.vertices.into_iter().map(|vert| {
-                [
-                    ((vert[0] - viewport.left()) / viewport.width()) * 2.0 - 1.0,
-                    ((vert[1] - viewport.top()) / viewport.height()) * 2.0 - 1.0,
-                ]
-            }));
+            asset
+                .0
+                .vertices
+                .extend(draw_data.vertices.into_iter().map(|vert| {
+                    [
+                        ((vert[0] - viewport.left()) / viewport.width()) * 2.0 - 1.0,
+                        ((vert[1] - viewport.top()) / viewport.height()) * 2.0 - 1.0,
+                    ]
+                }));
             asset.0.colors = draw_data.colors;
             asset.0.indices = draw_data.indices;
         };
 
-        if let Some(handle) = draw_data_handles.handles.get(gizmo_uuid) {
-            if let Some(mut asset) = draw_data_assets.get_mut(handle) {
-                write_draw_data(&mut asset);
-            }
+        if let Some(mut asset) = existing.and_then(|handle| draw_data_assets.get_mut(handle)) {
+            write_draw_data(&mut asset);
         } else {
             write_draw_data(&mut bevy_draw_data);
             let handle = draw_data_assets.add(bevy_draw_data);
@@ -729,7 +800,40 @@ fn cleanup_old_data(
         .gizmos
         .retain(|uuid, _| gizmos_to_keep.contains(uuid));
 
+    gizmo_storage
+        .draw_inputs
+        .retain(|uuid, _| gizmos_to_keep.contains(uuid));
     draw_data_handles
         .handles
         .retain(|uuid, _| gizmos_to_keep.contains(uuid));
+}
+
+#[cfg(test)]
+mod draw_reuse_tests {
+    use super::*;
+
+    #[test]
+    fn repeat_work_exact_draw_inputs_and_active_drag() {
+        let mut storage = GizmoStorage::default();
+        let id = Uuid::nil();
+        let config = GizmoConfig::default();
+        let interaction = GizmoInteraction::default();
+        let targets = [Transform::IDENTITY];
+        storage.record_draw_inputs(id, config, interaction, &targets, false);
+        assert!(storage.draw_inputs[&id].dirty);
+        storage.record_draw_inputs(id, config, interaction, &targets, false);
+        assert!(!storage.draw_inputs[&id].dirty);
+        let moved = [Transform::from_translation(bevy_math::Vec3::X)];
+        storage.record_draw_inputs(id, config, interaction, &moved, false);
+        assert!(storage.draw_inputs[&id].dirty);
+        let dragging = GizmoInteraction {
+            dragging: true,
+            ..interaction
+        };
+        storage.record_draw_inputs(id, config, dragging, &moved, false);
+        storage.record_draw_inputs(id, config, dragging, &moved, false);
+        assert!(storage.draw_inputs[&id].dirty);
+        storage.record_draw_inputs(id, config, interaction, &moved, false);
+        assert!(storage.draw_inputs[&id].dirty);
+    }
 }

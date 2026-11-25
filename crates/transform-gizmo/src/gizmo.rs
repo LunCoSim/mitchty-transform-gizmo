@@ -642,7 +642,7 @@ impl Gizmo {
 }
 
 /// Information needed for interacting with the gizmo.
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct GizmoInteraction {
     /// Current cursor position in window coordinates.
     pub cursor_pos: (f32, f32),

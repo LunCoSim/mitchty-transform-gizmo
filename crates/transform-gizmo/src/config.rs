@@ -20,7 +20,7 @@ pub const DEFAULT_SNAP_SCALE: f32 = 0.1;
 ///
 /// Defines how the gizmo is drawn to the screen and
 /// how it can be interacted with.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct GizmoConfig {
     /// View matrix for the gizmo, aligning it with the camera's viewpoint.
     pub view_matrix: mint::RowMatrix4<f64>,
@@ -442,7 +442,7 @@ pub enum GizmoDirection {
 }
 
 /// Controls the visual style of the gizmo
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct GizmoVisuals {
     /// Color of the x axis
     pub x_color: Color32,
